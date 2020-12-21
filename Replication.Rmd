@@ -1,0 +1,212 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+#install.packages("R.utils")
+library(R.utils)
+```
+
+```{r}
+#remove .gz compression using gunzip()
+library(R.utils)
+#gunzip("gz_data_LMB//enricoall2.dta.gz", remove=FALSE)
+#gunzip("gz_data_LMB//enricoall4.dta.gz", remove=FALSE)
+
+```
+
+```{r}
+#import .dta data using foreign()
+#each cell here on out will be for line/command of stata code from original paper
+#Line/s of corresponding original code will be commented at top of cell
+library(foreign)
+df_2 <- read.dta("enricoall2.dta")
+df_4 <- read.dta("enricoall4.dta")
+dim(df_2)
+dim(df_4)
+```
+
+```{r}
+#stata file: fig1.do
+#line 5:drop  demvs2 demvs3 demvs4;
+
+df_2_filtered <- subset(df_2, select = -c(demvs2, demvs3, demvs4))
+dim(df_2_filtered)
+
+```
+
+```{r}
+library(dplyr)
+#line 9-12:
+# g       d1 = 0 if lagdemvote <=.5;
+# replace d1 = 1 if lagdemvote >.5;
+# replace d1 = . if lagdemvote ==.;
+# tab d1;
+
+new_df_2 <- df_2_filtered
+
+new_df_2$d1 <-  ifelse(new_df_2$lagdemvote<=0.5, 0, 1)
+
+head(new_df_2)
+```
+
+
+```{r}
+#line 14-15
+# g bin2 = int(lagdemvote*100)/100; 
+# replace dembin = bin2;
+
+#int() -> returns the integer obtained by truncating x toward 0; thus,
+#floor() -> returns the unique integer n such that n ≤ x < n + 1
+#ceil() -> returns the unique integer n such that n − 1 < x ≤ n
+
+#round lagdemvote percentages (voter share, democrat) down to nearest integer
+bin2<-(as.integer(new_df_2$lagdemvote*100))/100
+new_df_2$dembin <- bin2
+head(new_df_2$dembin)
+dim(new_df_2)
+```
+```{r}
+#line 18: drop if state==. & district==. & dembin==.;
+
+#drop rows where variables stae, district, and dembin are all NA
+dropna_df_2 <- subset(new_df_2, !is.na(new_df_2$state)& !is.na(new_df_2$district)& !is.na(new_df_2$dembin))
+dim(dropna_df_2)
+
+#NA values still exist so certain operations such as taking the mean are not possible
+mean(dropna_df_2[dropna_df_2$dembin == 0,]$realada)
+```
+
+
+```{r}
+library(dplyr)
+#line 20-21
+# sort dembin;
+# collapse meanY100 = `1', by(dembin);
+#"... is the average ADA score within 0.01 intervals of the Democrat vote share"
+#'1' is the variable realada as defined in line 80, function is called big, argument is '1' = realada
+
+#in Stata, collapse automatically replaces all null values with 0
+#replace all NA values with 0s first
+dropna_df_2[order(dropna_df_2$dembin),]
+dropna_df_2$realada <- replace(dropna_df_2$realada, is.na(dropna_df_2$realada), 0)
+
+#The aggregate ADA scores into means, by dembin values
+df_2_collapse <- aggregate(dropna_df_2$realada, by=list(dropna_df_2$dembin), FUN = mean)
+
+df_2_collapse <- df_2_collapse %>% rename(dembin = Group.1, realada = x )
+df_2_collapse
+
+#mean ada scores, keeping in mind all NA values were replaced with 0
+mean(dropna_df_2$realada)
+```
+
+```{r}
+#line 23-28
+# g x2 = dembin*dembin;
+# g x3 = dembin*dembin*dembin;
+# g x4 = dembin*dembin*dembin*dembin;
+# g       dd1 = 0 if dembin<=.5;
+# replace dd1 = 1 if dembin>.5;
+# replace dd1 = . if dembin==.;
+
+#second, third, and fourth order variables (dembin, voter share)
+df_2_collapse$x2 <- df_2_collapse$dembin * df_2_collapse$dembin
+df_2_collapse$x3 <- df_2_collapse$dembin * df_2_collapse$dembin * df_2_collapse$dembin
+df_2_collapse$x4 <- df_2_collapse$dembin * df_2_collapse$dembin * df_2_collapse$dembin * df_2_collapse$dembin
+df_2_collapse$dd1 <-  ifelse(df_2_collapse$dembin<=0.5, 0, 1)
+print(df_2_collapse)
+```
+
+
+```{r}
+library(RStata)
+#line 30: reg meanY100 dd1 x2 x3 x4;
+
+#line 31 - 50:
+# predict fit;
+# predict stderror, stdp;
+# 
+# g fit1 =fit if dembin <.5;
+# g fit2 =fit if dembin >.5;
+# g stderror1 = stderror if dembin <.5;
+# g stderror2 = stderror if dembin >.5;
+# 
+# g int1U = fit1 + 2*stderror1;
+# g int1L = fit1 - 2*stderror1;
+# g int2U = fit2 + 2*stderror2;
+# g int2L = fit2 - 2*stderror2;
+# 
+# 
+# g       hat = fit1 if dembin<=.5;
+# replace hat = fit2 if dembin>.5;
+# g       upper = int1U if dembin<=.5;
+# replace upper = int2U if dembin>.5;
+# g       lower = int1L if dembin<=.5;
+# replace lower = int2L if dembin>.5;
+
+#manually run regression of meanY100 on dd1,x2,x3, and x4 across entire dataset
+#meanY100 is same variable as realada (ADA scores)
+lm1 <- lm(realada~ dd1+x2+x3+x4, data=df_2_collapse)
+
+df_2_pred <- df_2_collapse
+
+#predict for values in dataframe, including upper and lower 95% confidence intervals
+pred_table <- predict(lm1, df_2_pred, interval=("confidence"))
+df_2_pred$fit <- pred_table[, "fit"]
+df_2_pred$upper <- pred_table[, "upr"]
+df_2_pred$lower <- pred_table[, "lwr"]
+summary(lm1)
+head(df_2_pred)
+```
+
+```{r}
+
+#function that elementarily calculates gap at cutoff point = 0.5
+function_y <- function(d,vote_share){
+  x22<-vote_share*vote_share
+  x33<- vote_share*vote_share*vote_share
+  x44<-vote_share*vote_share*vote_share*vote_share
+  y<-7.151 + (19.632*d) + (158.952*x22)+ (-73.785*x33)+ (-63.811*x44)
+  return(y)
+}
+left_intercept <- function_y(0,0.49)
+right_intercept<- function_y(1, 0.51)
+
+total_effect <- round(right_intercept - left_intercept, 1)
+print(total_effect)
+```
+
+```{r}
+#line 63-68:
+# graph meanY100 fit1 fit2 int1U int1L int2U int2L dembin , 
+# l1(" ") l2("ADA Score, time t") b1(" ") t1(" ") t2(" ")
+# b2("Democrat Vote Share, time t-1")  xlabel(0,.5,1) ylabel (0,.5,1)
+# title(" ") xline(.5) 
+# c(.lll[-]l[-]l[-]l[-]) s(oiiii) sort saving(`1'_reduced.gph, replace);
+# translate `1'_reduced.gph `1'_reduced.eps, replace;
+
+
+#plot replication of Figure 1.
+library(ggplot2)
+ggplot()+
+  geom_line(data = subset(df_2_pred, dembin>0.5), aes(x = dembin, y = fit)) +
+  geom_line(data = subset(df_2_pred, dembin<=0.5), aes(x = dembin, y = fit))+
+  
+  geom_line(data = subset(df_2_pred, dembin>0.5), aes(x = dembin, y = upper), linetype="dashed") +
+  geom_line(data = subset(df_2_pred, dembin<=0.5), aes(x = dembin, y = upper), linetype="dashed")+
+  
+  geom_line(data = subset(df_2_pred, dembin>0.5), aes(x = dembin, y = lower), linetype="dashed") +
+  geom_line(data = subset(df_2_pred, dembin<=0.5), aes(x = dembin, y = lower), linetype="dashed")+
+  
+  geom_vline(xintercept = 0.5)+
+
+  geom_point(data = df_2_pred, aes(x=dembin,y = realada)) +
+  xlab("Democratic Vote Share, time t")+
+  ylab("ADA Score, time t+1") +
+  ggtitle("Total Effect of Election Pressure on Future ADA Scores")
+
+```
+ 
+ 

@@ -1,0 +1,96 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+#remove .gz compression using gunzip()
+library(R.utils)
+#gunzip("gz_data_LMB//enricoall2.dta.gz", remove=FALSE)
+#gunzip("gz_data_LMB//enricoall4.dta.gz", remove=FALSE)
+library(foreign)
+
+#same data cleaning as in Replication.rmd
+df_2 <- read.dta("enricoall2.dta")
+df_4 <- read.dta("enricoall4.dta")
+
+df_2_filtered <- subset(df_2, select = -c(demvs2, demvs3, demvs4))
+
+new_df_2 <- df_2_filtered
+
+new_df_2$d1 <-  ifelse(new_df_2$lagdemvote<=0.5, 0, 1)
+
+bin2<-(as.integer(new_df_2$lagdemvote*100))/100
+new_df_2$dembin <- bin2
+
+dropna_df_2 <- subset(new_df_2, !is.na(new_df_2$state)& !is.na(new_df_2$district)& !is.na(new_df_2$dembin))
+
+```
+
+```{r}
+#install.packages("zoo")
+library(zoo)
+```
+
+
+```{r}
+library(dplyr)
+
+dropna_df_2[order(dropna_df_2$dembin),]
+
+#Instead of simply collapsing values and treating null values as 0, interpolate with mean of that category instead
+aggregate_realada <- na.aggregate(dropna_df_2$realada, by=list(dropna_df_2$dembin), FUN = mean)
+df_2_newada <- dropna_df_2
+df_2_newada$realada <- aggregate_realada
+
+#mean of read ada now changes in comparison to replication mean
+mean(df_2_newada$realada)
+```
+
+```{r}
+
+#creating same additional higher order variables as in replication.rmd
+df_2_collapse$x2 <- df_2_collapse$dembin * df_2_collapse$dembin
+df_2_collapse$x3 <- df_2_collapse$dembin * df_2_collapse$dembin * df_2_collapse$dembin
+df_2_collapse$x4 <- df_2_collapse$dembin * df_2_collapse$dembin * df_2_collapse$dembin * df_2_collapse$dembin
+df_2_collapse$dd1 <-  ifelse(df_2_collapse$dembin<=0.5, 0, 1)
+print(df_2_collapse)
+```
+
+```{r}
+#use an optimized IK bandwidth selecter (for triangular kernels) to find best bandwidth
+bw <- rdbwselect_2014(y = df_2_newada$realada, x = df_2_newada$dembin, c=0.5, bwselect = "IK")
+
+bw
+```
+
+```{r}
+#install.packages("rdrobust")
+library(rdrobust)
+#covs <- df_2_pred[, c("dd1", "x2", "x3", "x4")]
+
+#triangular kernel  assigns weight only to values within bounds, with increasing weight closer to cutoff
+#uniform assigns equal weight to all values within bounds. Triangular is better in our case (as with most)
+#use rd_plot (built off gg_plot) to graph our new, extended regression discontinuity
+rd_plot <- rdplot(y=df_2_newada$realada, x = df_2_newada$dembin, c=0.5, kernel = "triangular", binselect = "es", ci = 95, h= 0.09674781, title = "Extension: Implementing Triangular Kernel & IK bandwidth", y.label = "ADA Score, time t+1", x.label = "Democratic Vote Share, time t")
+effect <- rd_plot$coef[1, "Right"]-rd_plot$coef[1, "Left"]
+print(effect)
+
+summary(rd_plot)
+rd_plot$coef
+```
+
+
+ 
+
+ 
